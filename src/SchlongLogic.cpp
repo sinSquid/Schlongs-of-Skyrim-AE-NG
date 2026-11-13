@@ -224,6 +224,49 @@ namespace SchlongLogic {
 		return nullptr;
 	}
 
+	namespace {
+		std::mutex playerGenderMutex;
+		std::optional<PlayerGenderOverride> playerGenderOverride;
+
+		void UpdatePlayerGender(RE::Actor* actor, std::optional<int> desiredRank) {
+			std::lock_guard lock(playerGenderMutex);
+			const int currentRank = actor->GetFactionRank(g_SexLabGenderFaction, true);
+			if (playerGenderOverride && currentRank != playerGenderOverride->appliedRank)
+				playerGenderOverride.reset();
+
+			if (!desiredRank) {
+				if (playerGenderOverride) {
+					const int previousRank = playerGenderOverride->previousRank;
+					if (currentRank != previousRank) {
+						if (previousRank < 0)
+							actor->RemoveFromFaction(g_SexLabGenderFaction);
+						else
+							actor->AddToFaction(g_SexLabGenderFaction, previousRank);
+					}
+					playerGenderOverride.reset();
+				}
+				return;
+			}
+			if (currentRank == *desiredRank)
+				return;
+			if (!playerGenderOverride)
+				playerGenderOverride = PlayerGenderOverride{ currentRank, *desiredRank };
+			else
+				playerGenderOverride->appliedRank = *desiredRank;
+			actor->AddToFaction(g_SexLabGenderFaction, *desiredRank);
+		}
+	}
+
+	std::optional<PlayerGenderOverride> GetPlayerGenderOverride() {
+		std::lock_guard lock(playerGenderMutex);
+		return playerGenderOverride;
+	}
+
+	void RestorePlayerGenderOverride(std::optional<PlayerGenderOverride> state) {
+		std::lock_guard lock(playerGenderMutex);
+		playerGenderOverride = state;
+	}
+
 	void UpdateFactions(RE::Actor* a_actor, RE::TESObjectARMO* a_schlong, bool a_resetSexLab) {
 
 		auto* base = a_actor ? a_actor->GetActorBase() : nullptr;
@@ -236,13 +279,33 @@ namespace SchlongLogic {
 		if (g_schlongifiedFaction)
 			a_actor->AddToFaction(g_schlongifiedFaction, hasSchlong ? 0 : -1);
 
-		if (!g_SexLabGenderFaction || !Util::IsFemale(base))
+		const bool isPlayer = a_actor->IsPlayerRef();
+		const bool isFemale = Util::IsFemale(base);
+		if (!g_SexLabGenderFaction || (!isPlayer && !isFemale))
 			return;
 
-		if (hasSchlong && g_settings.sexLabForceMale)
-			a_actor->AddToFaction(g_SexLabGenderFaction, 0);
-		else if (a_resetSexLab)
-			a_actor->AddToFaction(g_SexLabGenderFaction, 1);
+		const auto genderModes = g_settings.GetSexLabGender();
+		const auto mode = isPlayer && genderModes.player != SexLabTreatment::Default ? genderModes.player : genderModes.global;
+		int rank = 1;
+		if (mode == SexLabTreatment::Male)
+			rank = 0;
+		else if (mode == SexLabTreatment::Futa)
+			rank = 2;
+
+		if (isPlayer) {
+			std::optional<int> desiredRank;
+			if (hasSchlong && (isFemale || genderModes.player != SexLabTreatment::Default))
+				desiredRank = rank;
+			UpdatePlayerGender(a_actor, desiredRank);
+			return;
+		}
+
+		if (hasSchlong || a_resetSexLab) {
+			if (!hasSchlong)
+				rank = 1;
+			if (a_actor->GetFactionRank(g_SexLabGenderFaction, isPlayer) != rank)
+				a_actor->AddToFaction(g_SexLabGenderFaction, rank);
+		}
 	}
 
 	void EquipAddon(RE::Actor* a_actor, RE::TESObjectARMO* a_schlong, bool a_applyNow) {

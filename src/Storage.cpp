@@ -1,6 +1,7 @@
 #include "Storage.h"
 
 #include "Actors.h"
+#include "SchlongLogic.h"
 #include "util.h"
 
 #include <algorithm>
@@ -558,6 +559,8 @@ namespace Storage {
 		// Don't change these, they identify the data already saved in the cosaves
 		constexpr std::uint32_t kSerializationVersion = 3;
 		constexpr std::uint32_t kNPCRecord = 'NPCs';
+		constexpr std::uint32_t kPlayerGenderRecord = 'PGOV';
+		constexpr std::uint32_t kPlayerGenderVersion = 1;
 
 		// Sanity limit when reading, a longer name means the record is corrupt
 		constexpr std::uint32_t kMaxAddonNameLength = 1024;
@@ -588,13 +591,28 @@ namespace Storage {
 		}
 
 		SKSE::log::info("SOS: Saved {} NPCs in the cosave", numNPCs);
+		if (const auto state = SchlongLogic::GetPlayerGenderOverride()) {
+			if (a_intfc->OpenRecord(kPlayerGenderRecord, kPlayerGenderVersion)) {
+				a_intfc->WriteRecordData(state->previousRank);
+				a_intfc->WriteRecordData(state->appliedRank);
+			}
+		}
 	}
 
 	void LoadCallback(SKSE::SerializationInterface* a_intfc) {
+		SchlongLogic::RestorePlayerGenderOverride(std::nullopt);
 
 		std::uint32_t type, version, length;
 
 		while (a_intfc->GetNextRecordInfo(type, version, length)) {
+			if (type == kPlayerGenderRecord) {
+				SchlongLogic::PlayerGenderOverride state{};
+				if (version == kPlayerGenderVersion && length == 2 * sizeof(std::int32_t) &&
+					a_intfc->ReadRecordData(state.previousRank) && a_intfc->ReadRecordData(state.appliedRank) &&
+					state.previousRank >= -1 && state.previousRank <= 127 && state.appliedRank >= 0 && state.appliedRank <= 2)
+					SchlongLogic::RestorePlayerGenderOverride(state);
+				continue;
+			}
 
 			if (type != kNPCRecord)
 				continue;
@@ -640,6 +658,7 @@ namespace Storage {
 	}
 
 	void RevertCallback(SKSE::SerializationInterface*) {
+		SchlongLogic::RestorePlayerGenderOverride(std::nullopt);
 
 		SKSE::log::info("SOS: Reverting storage, clearing the NPC entries");
 

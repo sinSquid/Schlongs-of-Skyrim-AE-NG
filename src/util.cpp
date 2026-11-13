@@ -84,7 +84,13 @@ void Settings::Load() {
 	chance = static_cast<int>(ini.GetLongValue(kIniSection, "Chance", chance));
 	gaussianDeviation = static_cast<float>(ini.GetDoubleValue(kIniSection, "GaussianDeviation", static_cast<double>(gaussianDeviation)));
 	whitelistMode = ini.GetBoolValue(kIniSection, "SOS_SchlongEligibleActorMods is a Whitelist", whitelistMode);
-	sexLabForceMale = ini.GetBoolValue(kIniSection, "SexLabForceMaleOnSchlong", sexLabForceMale);
+	const auto previousModes = GetSexLabGender();
+	const bool male = ini.GetBoolValue(kIniSection, "SexLabForceMaleOnSchlong", previousModes.global == SexLabTreatment::Male);
+	const bool futa = ini.GetBoolValue(kIniSection, "SexLabForceFutaOnSchlong", previousModes.global == SexLabTreatment::Futa);
+	const bool playerMale = ini.GetBoolValue(kIniSection, "SexLabForcePlayerMaleOnSchlong", false);
+	const bool playerFuta = ini.GetBoolValue(kIniSection, "SexLabForcePlayerFutaOnSchlong", false);
+	SetSexLabGender({ futa ? SexLabTreatment::Futa : male ? SexLabTreatment::Male : SexLabTreatment::Default,
+		playerFuta ? SexLabTreatment::Futa : playerMale ? SexLabTreatment::Male : SexLabTreatment::Default });
 
 	// Scan codes go from 1 to 255, anything else is treated as unbound
 	for (std::size_t i = 0; i < keys.size(); ++i) {
@@ -107,7 +113,11 @@ void Settings::Save() const {
 	ini.SetLongValue(kIniSection, "Chance", chance);
 	ini.SetDoubleValue(kIniSection, "GaussianDeviation", static_cast<double>(gaussianDeviation));
 	ini.SetBoolValue(kIniSection, "SOS_SchlongEligibleActorMods is a Whitelist", whitelistMode);
-	ini.SetBoolValue(kIniSection, "SexLabForceMaleOnSchlong", sexLabForceMale);
+	const auto genderModes = GetSexLabGender();
+	ini.SetBoolValue(kIniSection, "SexLabForceMaleOnSchlong", genderModes.global == SexLabTreatment::Male);
+	ini.SetBoolValue(kIniSection, "SexLabForceFutaOnSchlong", genderModes.global == SexLabTreatment::Futa);
+	ini.SetBoolValue(kIniSection, "SexLabForcePlayerMaleOnSchlong", genderModes.player == SexLabTreatment::Male);
+	ini.SetBoolValue(kIniSection, "SexLabForcePlayerFutaOnSchlong", genderModes.player == SexLabTreatment::Futa);
 
 	for (std::size_t i = 0; i < keys.size(); ++i)
 		ini.SetLongValue(kIniSection, kKeyIniNames[i], keys[i]);

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -69,6 +70,13 @@ namespace Binding {
 	};
 }
 
+enum class SexLabTreatment : std::uint8_t { Default, Male, Futa };
+
+struct SexLabGenderSettings {
+	SexLabTreatment global;
+	SexLabTreatment player;
+};
+
 struct Settings {
 
 	bool enabled{ true };                      // Default "Enabled" of the new race entries
@@ -76,7 +84,14 @@ struct Settings {
 	int chance{ Util::kDefaultChance };        // Default "Chance" of the new race entries (0-100)
 	float gaussianDeviation{ 1.0f };           // Spread of the random ranks around the target rank
 	bool whitelistMode{ true };                // true: only female NPCs of the listed mods are eligible, false: all except the listed ones
-	bool sexLabForceMale{ true };              // Females with a schlong are treated as male by SexLab
+	SexLabGenderSettings GetSexLabGender() const {
+		const auto modes = sexLabGender_.load(std::memory_order_acquire);
+		return { static_cast<SexLabTreatment>(modes & 3), static_cast<SexLabTreatment>((modes >> 2) & 3) };
+	}
+
+	void SetSexLabGender(SexLabGenderSettings modes) {
+		sexLabGender_.store(static_cast<std::uint8_t>(modes.global) | (static_cast<std::uint8_t>(modes.player) << 2), std::memory_order_release);
+	}
 
 	// DirectInput scan codes, 0 = unbound. Pin: N. Bend of the pinned NPC: Page Up / Page Down. Bend of the player: unbound.
 	std::array<int, Binding::kCount> keys{ 49, 201, 209, 0, 0 };
@@ -85,6 +100,10 @@ struct Settings {
 	void Load();
 
 	void Save() const;
+
+private:
+	// One atomic publication for both mutually exclusive groups. Default: global male, player inherits.
+	std::atomic<std::uint8_t> sexLabGender_{ 1 };
 };
 
 inline Settings g_settings;
@@ -93,7 +112,7 @@ inline Settings g_settings;
 // OTHER PLUGINS
 // ===============================================================
 
-// SexLab gender faction (rank 0 = male, 1 = female)
+// SexLab gender faction (rank 0 = male, 1 = female, 2 = futa in SexLab P+)
 extern RE::TESFaction* g_SexLabGenderFaction;
 
 // Schlongs of Skyrim faction (rank 0 = has a schlong, -1 = hasn't)

@@ -1,10 +1,18 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace SchlongLogic {
+
+	struct PlayerGenderOverride {
+		std::int32_t previousRank;
+		std::int32_t appliedRank;
+	};
+	std::optional<PlayerGenderOverride> GetPlayerGenderOverride();
+	void RestorePlayerGenderOverride(std::optional<PlayerGenderOverride> state);
 
 	// Addon the actor should wear: the one already assigned to its NPC base, or a new random one that
 	// gets stored. nullptr if it shouldn't have any. Only for the game thread, it can roll and assign.
@@ -23,6 +31,7 @@ namespace SchlongLogic {
 	std::vector<std::string> GetCompatibleAddonNames(RE::TESNPC* a_base);
 
 	// Updates the Schlongified and the SexLab gender factions according to the addon of the actor.
+	// Female actors with a real addon follow the current male/futa/female setting, including on load.
 	// a_resetSexLab: females that don't get a schlong are also put back as female in SexLab.
 	void UpdateFactions(RE::Actor* a_actor, RE::TESObjectARMO* a_schlong, bool a_resetSexLab = false);
 

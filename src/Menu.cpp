@@ -177,6 +177,25 @@ namespace Menu {
 			});
 		}
 
+		// Update only the player and the selected NPC. Other actors synchronize on load.
+		void QueueSyncSexLabGender(bool includePinned = true) {
+			const auto* pinned = includePinned ? Input::GetPinnedActor() : nullptr;
+			const RE::FormID pinnedID = pinned ? pinned->GetFormID() : 0;
+			SKSE::GetTaskInterface()->AddTask([pinnedID]() {
+				const auto sync = [](RE::Actor* actor) {
+					if (actor && actor->Is3DLoaded() && actor->GetActorBase()) {
+						auto* schlong = SchlongLogic::ResolveCachedAddon(actor->GetActorBase()->GetFormID());
+						if (schlong || actor->IsPlayerRef())
+							SchlongLogic::UpdateFactions(actor, schlong, actor->IsPlayerRef());
+					}
+				};
+				auto* player = RE::PlayerCharacter::GetSingleton();
+				sync(player);
+				if (pinnedID && (!player || pinnedID != player->GetFormID()))
+					sync(RE::TESForm::LookupByID<RE::Actor>(pinnedID));
+			});
+		}
+
 		void QueueClearNPCData() {
 
 			SKSE::GetTaskInterface()->AddTask([]() {
@@ -595,10 +614,42 @@ namespace Menu {
 
 			Gui::SeparatorText("SexLab");
 
-			if (Gui::Checkbox("Force male treatment on female schlong", &g_settings.sexLabForceMale))
+			auto genderModes = g_settings.GetSexLabGender();
+			bool globalMale = genderModes.global == SexLabTreatment::Male;
+			if (Gui::Checkbox("Force male treatment on female schlong", &globalMale)) {
+				genderModes.global = globalMale ? SexLabTreatment::Male : SexLabTreatment::Default;
+				g_settings.SetSexLabGender(genderModes);
 				g_settings.Save();
+				QueueSyncSexLabGender();
+			}
 
 			Tooltip("If disabled, females keep being treated as female by SexLab even with a schlong equipped.");
+			bool globalFuta = genderModes.global == SexLabTreatment::Futa;
+			if (Gui::Checkbox("Force futa treatment on female schlong", &globalFuta)) {
+				genderModes.global = globalFuta ? SexLabTreatment::Futa : SexLabTreatment::Default;
+				g_settings.SetSexLabGender(genderModes);
+				g_settings.Save();
+				QueueSyncSexLabGender();
+			}
+			Tooltip("SexLab P+: treat females with a schlong as futa. Mutually exclusive with male treatment; both off means female.");
+
+			Gui::SeparatorText("Player overrides");
+			bool playerMale = genderModes.player == SexLabTreatment::Male;
+			if (Gui::Checkbox("Force male treatment on player schlong", &playerMale)) {
+				genderModes.player = playerMale ? SexLabTreatment::Male : SexLabTreatment::Default;
+				g_settings.SetSexLabGender(genderModes);
+				g_settings.Save();
+				QueueSyncSexLabGender(false);
+			}
+			Tooltip("Overrides global treatment for the player with an SOS addon. Both player options off follows global treatment.");
+			bool playerFuta = genderModes.player == SexLabTreatment::Futa;
+			if (Gui::Checkbox("Force futa treatment on player schlong", &playerFuta)) {
+				genderModes.player = playerFuta ? SexLabTreatment::Futa : SexLabTreatment::Default;
+				g_settings.SetSexLabGender(genderModes);
+				g_settings.Save();
+				QueueSyncSexLabGender(false);
+			}
+			Tooltip("SexLab P+: player futa override takes priority over global treatment. Mutually exclusive with the player male option.");
 
 			if (!s_status.empty()) {
 				Gui::Separator();
