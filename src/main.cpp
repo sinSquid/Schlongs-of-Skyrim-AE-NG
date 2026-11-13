@@ -3,6 +3,7 @@
 #include "Armors.h"
 #include "Input.h"
 #include "Menu.h"
+#include "SchlongLogic.h"
 #include "Schlongification.h"
 #include "Storage.h"
 #include "util.h"
@@ -59,8 +60,22 @@ namespace {
 
 	void OnSKSEMessage(SKSE::MessagingInterface::Message* a_message) {
 
-		if (a_message->type == SKSE::MessagingInterface::kDataLoaded)
+		using Message = SKSE::MessagingInterface;
+		if (a_message->type == Message::kDataLoaded) {
 			OnDataLoaded();
+		} else if (a_message->type == Message::kPreLoadGame) {
+			SchlongLogic::BeginSaveTransition();
+		} else if (a_message->type == Message::kPostLoadGame) {
+			// SKSE encodes the success boolean in the message pointer itself.
+			const bool succeeded = a_message->data != nullptr;
+			SchlongLogic::FinishSaveTransition(succeeded);
+			if (succeeded)
+				SOS::QueueLoadedPlayerRefresh();
+		} else if (a_message->type == Message::kNewGame) {
+			SchlongLogic::BeginSaveTransition();
+			SchlongLogic::FinishSaveTransition(true);
+			SOS::QueueLoadedPlayerRefresh();
+		}
 	}
 }
 

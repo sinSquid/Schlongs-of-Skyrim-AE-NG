@@ -13,6 +13,10 @@ namespace SchlongLogic {
 	};
 	std::optional<PlayerGenderOverride> GetPlayerGenderOverride();
 	void RestorePlayerGenderOverride(std::optional<PlayerGenderOverride> state);
+	void BeginSaveTransition();
+	void FinishSaveTransition(bool succeeded);
+	std::uint64_t GetSaveGeneration();
+	bool CanRunSaveTask(std::uint64_t generation);
 
 	// Addon the actor should wear: the one already assigned to its NPC base, or a new random one that
 	// gets stored. nullptr if it shouldn't have any. Only for the game thread, it can roll and assign.

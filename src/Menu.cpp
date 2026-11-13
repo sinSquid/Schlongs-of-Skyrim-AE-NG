@@ -146,7 +146,10 @@ namespace Menu {
 		// Makes an armor revealing or concealing and updates the addon of the actor that wears it
 		void QueueSetArmorOverride(RE::FormID a_actorID, RE::FormID a_armorID, bool a_revealing) {
 
-			SKSE::GetTaskInterface()->AddTask([a_actorID, a_armorID, a_revealing]() {
+			const auto generation = SchlongLogic::GetSaveGeneration();
+			SKSE::GetTaskInterface()->AddTask([a_actorID, a_armorID, a_revealing, generation]() {
+				if (!SchlongLogic::CanRunSaveTask(generation))
+					return;
 
 				auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
 				auto* armor = RE::TESForm::LookupByID<RE::TESObjectARMO>(a_armorID);
@@ -181,7 +184,10 @@ namespace Menu {
 		void QueueSyncSexLabGender(bool includePinned = true) {
 			const auto* pinned = includePinned ? Input::GetPinnedActor() : nullptr;
 			const RE::FormID pinnedID = pinned ? pinned->GetFormID() : 0;
-			SKSE::GetTaskInterface()->AddTask([pinnedID]() {
+			const auto generation = SchlongLogic::GetSaveGeneration();
+			SKSE::GetTaskInterface()->AddTask([pinnedID, generation]() {
+				if (!SchlongLogic::CanRunSaveTask(generation))
+					return;
 				const auto sync = [](RE::Actor* actor) {
 					if (actor && actor->Is3DLoaded() && actor->GetActorBase()) {
 						auto* schlong = SchlongLogic::ResolveCachedAddon(actor->GetActorBase()->GetFormID());

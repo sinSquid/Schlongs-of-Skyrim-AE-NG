@@ -25,6 +25,8 @@ namespace SOS {
 
 			if (!a_actor || !a_actor->Is3DLoaded() || !a_actor->GetActorBase())
 				return;
+			if (a_actor->IsPlayerRef() && !SchlongLogic::CanRunSaveTask(SchlongLogic::GetSaveGeneration()))
+				return;
 
 			auto* schlong = SchlongLogic::DetermineWinningAddon(a_actor);
 			SchlongLogic::UpdateFactions(a_actor, schlong);
@@ -117,6 +119,14 @@ namespace SOS {
 			OnArmorChange(actor, a_event);
 
 		return RE::BSEventNotifyControl::kContinue;
+	}
+
+	void QueueLoadedPlayerRefresh() {
+		const auto generation = SchlongLogic::GetSaveGeneration();
+		SKSE::GetTaskInterface()->AddTask([generation]() {
+			if (SchlongLogic::CanRunSaveTask(generation))
+				OnActorLoaded(RE::PlayerCharacter::GetSingleton());
+		});
 	}
 
 	void RegisterEvents() {

@@ -24,4 +24,5 @@ namespace SOS {
 	};
 
 	void RegisterEvents();
+	void QueueLoadedPlayerRefresh();
 }

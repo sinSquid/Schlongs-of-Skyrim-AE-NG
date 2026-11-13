@@ -227,9 +227,13 @@ namespace SchlongLogic {
 	namespace {
 		std::mutex playerGenderMutex;
 		std::optional<PlayerGenderOverride> playerGenderOverride;
+		std::uint64_t saveGeneration = 0;
+		bool saveTransitionPending = false;
 
 		void UpdatePlayerGender(RE::Actor* actor, std::optional<int> desiredRank) {
 			std::lock_guard lock(playerGenderMutex);
+			if (saveTransitionPending)
+				return;
 			const int currentRank = actor->GetFactionRank(g_SexLabGenderFaction, true);
 			if (playerGenderOverride && currentRank != playerGenderOverride->appliedRank)
 				playerGenderOverride.reset();
@@ -259,12 +263,40 @@ namespace SchlongLogic {
 
 	std::optional<PlayerGenderOverride> GetPlayerGenderOverride() {
 		std::lock_guard lock(playerGenderMutex);
+		if (saveTransitionPending)
+			return std::nullopt;
 		return playerGenderOverride;
 	}
 
 	void RestorePlayerGenderOverride(std::optional<PlayerGenderOverride> state) {
 		std::lock_guard lock(playerGenderMutex);
 		playerGenderOverride = state;
+	}
+
+	void BeginSaveTransition() {
+		std::lock_guard lock(playerGenderMutex);
+		++saveGeneration;
+		saveTransitionPending = true;
+		playerGenderOverride.reset();
+	}
+
+	void FinishSaveTransition(bool succeeded) {
+		std::lock_guard lock(playerGenderMutex);
+		// Also invalidate tasks submitted while the load was in progress.
+		++saveGeneration;
+		saveTransitionPending = !succeeded;
+		if (!succeeded)
+			playerGenderOverride.reset();
+	}
+
+	std::uint64_t GetSaveGeneration() {
+		std::lock_guard lock(playerGenderMutex);
+		return saveGeneration;
+	}
+
+	bool CanRunSaveTask(std::uint64_t generation) {
+		std::lock_guard lock(playerGenderMutex);
+		return !saveTransitionPending && generation == saveGeneration;
 	}
 
 	void UpdateFactions(RE::Actor* a_actor, RE::TESObjectARMO* a_schlong, bool a_resetSexLab) {
@@ -389,8 +421,12 @@ namespace SchlongLogic {
 
 	void QueueRefresh(RE::FormID a_actorID) {
 
-		SKSE::GetTaskInterface()->AddTask([a_actorID]() {
+		const auto generation = GetSaveGeneration();
+		SKSE::GetTaskInterface()->AddTask([a_actorID, generation]() {
+			if (!CanRunSaveTask(generation))
+				return;
 			RefreshActor(RE::TESForm::LookupByID<RE::Actor>(a_actorID));
 		});
 	}
+
 }

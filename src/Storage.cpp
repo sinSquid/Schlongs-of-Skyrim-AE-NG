@@ -658,7 +658,7 @@ namespace Storage {
 	}
 
 	void RevertCallback(SKSE::SerializationInterface*) {
-		SchlongLogic::RestorePlayerGenderOverride(std::nullopt);
+		SchlongLogic::BeginSaveTransition();
 
 		SKSE::log::info("SOS: Reverting storage, clearing the NPC entries");
 

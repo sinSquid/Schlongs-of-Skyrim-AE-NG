@@ -32,6 +32,7 @@ pre=r'''#define NOMINMAX
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -42,18 +43,25 @@ pre=r'''#define NOMINMAX
 namespace RE {
 using FormID = std::uint32_t;
 struct TESFaction {};
-struct TESNPC { bool female = true; };
+struct TESNPC { bool female = true; FormID GetFormID() { return 14; } };
 struct TESObjectARMO { bool pubes = false; };
 struct Actor {
     TESNPC base;
     bool player = true;
     int rank = -1;
     int writes = 0;
+    bool loaded = true;
+    bool Is3DLoaded() { return loaded; }
+    FormID GetFormID() { return 14; }
     TESNPC* GetActorBase() { return &base; }
     bool IsPlayerRef() { return player; }
     int GetFactionRank(TESFaction*, bool) { return rank; }
     void AddToFaction(TESFaction*, int value) { rank = value; ++writes; }
     void RemoveFromFaction(TESFaction*) { rank = -1; ++writes; }
+};
+struct PlayerCharacter : Actor {
+    inline static Actor* current = nullptr;
+    static Actor* GetSingleton() { return current; }
 };
 }
 namespace Util {
@@ -69,6 +77,20 @@ template<class... Args> void warn(Args&&...) {}
 template<class... Args> void error(Args&&...) {}
 }
 namespace SKSE {
+struct MessagingInterface {
+    enum { kDataLoaded, kPreLoadGame, kPostLoadGame, kNewGame };
+    struct Message { int type; void* data = nullptr; };
+};
+struct Tasks {
+    std::vector<std::function<void()>> pending;
+    void AddTask(std::function<void()> task) { pending.push_back(std::move(task)); }
+    void Run() {
+        auto tasks = std::move(pending);
+        pending.clear();
+        for (auto& task : tasks) task();
+    }
+};
+Tasks* GetTaskInterface() { static Tasks tasks; return &tasks; }
 struct SerializationInterface {
     struct Record { std::uint32_t type, version; std::vector<unsigned char> data; };
     std::vector<Record> records;
@@ -148,6 +170,7 @@ int main() {
         Storage::RevertCallback(nullptr);
         assert(!GetPlayerGenderOverride());
         Storage::LoadCallback(&save);
+        FinishSaveTransition(true);
         assert(Storage::s_npcData.at(42).addonName == "example-addon" && Storage::s_npcData.at(42).rank == 7);
         UpdateFactions(&player, nullptr, false);
         assert(player.rank == prior && !GetPlayerGenderOverride()); ++checks;
@@ -177,6 +200,7 @@ int main() {
     UpdateFactions(&player, &addon, false); assert(player.rank == -1); ++checks;
     // Old saves and invalid ownership records must not retain the previous save's owner.
     RestorePlayerGenderOverride(PlayerGenderOverride{0, 2});
+    const auto refreshesBeforeLoad = loadedAddonQueries;
     SKSE::SerializationInterface oldSave;
     Storage::LoadCallback(&oldSave); assert(!GetPlayerGenderOverride()); ++checks;
     for (int variant = 0; variant < 4; ++variant) {
@@ -189,6 +213,70 @@ int main() {
         if (variant != 1) bad.WriteRecordData(applied);
         Storage::LoadCallback(&bad); assert(!GetPlayerGenderOverride()); ++checks;
     }
+    // Drive the real SKSE message handler and queued actor refresh across save boundaries.
+    using Message = SKSE::MessagingInterface;
+    auto send = [](int type, void* data = nullptr) {
+        Message::Message message{type, data};
+        OnSKSEMessage(&message);
+    };
+    auto* success = reinterpret_cast<void*>(1);
+    RE::Actor nextPlayer; nextPlayer.rank = 2;
+    RE::PlayerCharacter::current = &nextPlayer;
+    RestorePlayerGenderOverride(PlayerGenderOverride{0, 2});
+    SOS::QueueLoadedPlayerRefresh(); // Old save task.
+    send(Message::kPreLoadGame);
+    Storage::RevertCallback(nullptr);
+    SOS::OnActorLoaded(&nextPlayer); // Arrives before PGOV is available.
+    assert(nextPlayer.writes == 0);
+    SKSE::SerializationInterface newSave;
+    newSave.OpenRecord('PGOV', 1);
+    newSave.WriteRecordData(std::int32_t{1});
+    newSave.WriteRecordData(std::int32_t{2});
+    Storage::LoadCallback(&newSave);
+    SOS::OnActorLoaded(&nextPlayer); // PGOV is available but load has not completed.
+    SOS::QueueLoadedPlayerRefresh(); // Task queued during the load.
+    assert(nextPlayer.writes == 0 && !GetPlayerGenderOverride());
+    send(Message::kPostLoadGame, success);
+    SKSE::GetTaskInterface()->Run();
+    assert(nextPlayer.rank == 1 && nextPlayer.writes == 1 && !GetPlayerGenderOverride());
+    assert(loadedAddonQueries == refreshesBeforeLoad + 1);
+    ++checks;
+
+    nextPlayer.rank = 2; nextPlayer.writes = 0;
+    send(Message::kPreLoadGame);
+    send(Message::kPostLoadGame, success); // Missing cosave: no serialization callback.
+    SKSE::GetTaskInterface()->Run();
+    assert(nextPlayer.rank == 2 && nextPlayer.writes == 0);
+    ++checks;
+
+    send(Message::kPreLoadGame);
+    newSave.next = 0;
+    Storage::LoadCallback(&newSave);
+    send(Message::kPostLoadGame); // Failed load never writes faction state.
+    SOS::OnActorLoaded(&nextPlayer);
+    SKSE::GetTaskInterface()->Run();
+    assert(nextPlayer.rank == 2 && nextPlayer.writes == 0 && !GetPlayerGenderOverride());
+    ++checks;
+
+    send(Message::kPreLoadGame);
+    newSave.next = 0;
+    Storage::LoadCallback(&newSave);
+    nextPlayer.loaded = false;
+    send(Message::kPostLoadGame, success);
+    SKSE::GetTaskInterface()->Run();
+    assert(nextPlayer.writes == 0);
+    nextPlayer.loaded = true;
+    SOS::OnActorLoaded(&nextPlayer);
+    assert(nextPlayer.rank == 1 && nextPlayer.writes == 1);
+    ++checks;
+
+    nextPlayer.rank = 2; nextPlayer.writes = 0;
+    RestorePlayerGenderOverride(PlayerGenderOverride{0, 2});
+    send(Message::kNewGame);
+    SKSE::GetTaskInterface()->Run();
+    assert(nextPlayer.rank == 2 && nextPlayer.writes == 0 && !GetPlayerGenderOverride());
+    ++checks;
+
     // Actual INI methods: conflicting booleans, roundtrip and missing new keys.
     std::ofstream(INIPath) << "[JSON]\nSexLabForceMaleOnSchlong=true\nSexLabForceFutaOnSchlong=true\nSexLabForcePlayerMaleOnSchlong=true\nSexLabForcePlayerFutaOnSchlong=true\n";
     Settings setting; setting.Load();
@@ -255,7 +343,24 @@ ui_checks=r'''
 '''
 tests=tests.replace('    // Concurrent publication',ui_checks+'\n    // Concurrent publication')
 
-(w/'regression.cpp').write_text(pre+keys+'\n'+settings+'\nSettings g_settings;\n'+settings_io+'\nnamespace SchlongLogic {\n'+decl+logic+'\n}\n'+store_pre+serialization+ui_pre+menu[a:b]+'\n}\n'+tests,'utf-8')
+events = (src / 'Schlongification.cpp').read_text('utf-8')
+actor_loaded = events[events.index('\t\tvoid OnActorLoaded('):events.index('\n\t\t// Underwear')]
+queued_refresh = events[events.index('\tvoid QueueLoadedPlayerRefresh()'):events.index('\n\tvoid RegisterEvents()')]
+main = (src / 'main.cpp').read_text('utf-8')
+message_handler = main[main.index('\tvoid OnSKSEMessage('):main.index('\n}\n\nSKSEPluginLoad')]
+load_stubs = r'''
+int loadedAddonQueries = 0;
+namespace SchlongLogic {
+void UpdateFactions(RE::Actor*, RE::TESObjectARMO*, bool = false);
+RE::TESObjectARMO* DetermineWinningAddon(RE::Actor*) { ++loadedAddonQueries; return nullptr; }
+void EquipAddon(RE::Actor*, RE::TESObjectARMO*) {}
+void ScaleSchlongBones(RE::FormID) {}
+}
+namespace SOS {
+bool NeedsEquip(RE::Actor*, RE::TESObjectARMO*) { return false; }
+'''
+
+(w/'regression.cpp').write_text(pre+keys+'\n'+settings+'\nSettings g_settings;\n'+settings_io+'\nnamespace SchlongLogic {\n'+decl+logic+'\n}\n'+store_pre+serialization+ui_pre+menu[a:b]+'\n}\n'+load_stubs+actor_loaded+queued_refresh+'\n}\nvoid OnDataLoaded() {}\n'+message_handler+tests,'utf-8')
 inc=args.simpleini.resolve()
 command = "@echo off\n" + f'call "{vcvars}" >nul\n' + f'cl /nologo /std:c++latest /EHsc /utf-8 /I"{inc}" regression.cpp /Fe:regression.exe\n' + "if errorlevel 1 exit /b %errorlevel%\nregression.exe\nexit /b %errorlevel%\n"
 (w / "test.cmd").write_text(command, encoding="utf-8")
