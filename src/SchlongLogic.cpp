@@ -229,6 +229,7 @@ namespace SchlongLogic {
 		std::optional<PlayerGenderOverride> playerGenderOverride;
 		std::uint64_t saveGeneration = 0;
 		bool saveTransitionPending = false;
+		std::optional<PlayerGenderOverride> previousSaveOverride;
 
 		void UpdatePlayerGender(RE::Actor* actor, std::optional<int> desiredRank) {
 			std::lock_guard lock(playerGenderMutex);
@@ -276,17 +277,32 @@ namespace SchlongLogic {
 	void BeginSaveTransition() {
 		std::lock_guard lock(playerGenderMutex);
 		++saveGeneration;
+		if (!saveTransitionPending)
+			previousSaveOverride = playerGenderOverride;
 		saveTransitionPending = true;
 		playerGenderOverride.reset();
 	}
 
+	void RevertSaveTransition() {
+		std::lock_guard lock(playerGenderMutex);
+		++saveGeneration;
+		// Standalone script reloads don't change the player or send PostLoadGame.
+		if (saveTransitionPending) {
+			previousSaveOverride.reset();
+			playerGenderOverride.reset();
+		}
+	}
+
 	void FinishSaveTransition(bool succeeded) {
 		std::lock_guard lock(playerGenderMutex);
+		if (!saveTransitionPending)
+			return;
 		// Also invalidate tasks submitted while the load was in progress.
 		++saveGeneration;
-		saveTransitionPending = !succeeded;
+		saveTransitionPending = false;
 		if (!succeeded)
-			playerGenderOverride.reset();
+			playerGenderOverride = previousSaveOverride;
+		previousSaveOverride.reset();
 	}
 
 	std::uint64_t GetSaveGeneration() {

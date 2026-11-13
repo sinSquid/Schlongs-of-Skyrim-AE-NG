@@ -3,9 +3,15 @@
 #include "SchlongLogic.h"
 #include "util.h"
 
+#include <chrono>
+#include <functional>
+#include <thread>
+
 namespace SOS {
 
 	namespace {
+		// Both actor events and SKSE refresh tasks run on the game thread.
+		std::optional<std::uint64_t> lastPlayerRefresh;
 
 		// True if the addon has to be equipped: it isn't worn yet and nothing hides it
 		bool NeedsEquip(RE::Actor* a_actor, RE::TESObjectARMO* a_schlong) {
@@ -25,8 +31,12 @@ namespace SOS {
 
 			if (!a_actor || !a_actor->Is3DLoaded() || !a_actor->GetActorBase())
 				return;
-			if (a_actor->IsPlayerRef() && !SchlongLogic::CanRunSaveTask(SchlongLogic::GetSaveGeneration()))
-				return;
+			if (a_actor->IsPlayerRef()) {
+				const auto generation = SchlongLogic::GetSaveGeneration();
+				if (!SchlongLogic::CanRunSaveTask(generation))
+					return;
+				lastPlayerRefresh = generation;
+			}
 
 			auto* schlong = SchlongLogic::DetermineWinningAddon(a_actor);
 			SchlongLogic::UpdateFactions(a_actor, schlong);
@@ -121,12 +131,34 @@ namespace SOS {
 		return RE::BSEventNotifyControl::kContinue;
 	}
 
+	namespace {
+		// SKSE drains newly queued tasks in the same pass, so delay retries off the game thread.
+		void DelayPlayerRefresh(std::function<void()> task) {
+			std::thread([task = std::move(task)]() {
+				std::this_thread::sleep_for(std::chrono::milliseconds(100));
+				SKSE::GetTaskInterface()->AddTask(task);
+			}).detach();
+		}
+
+		void TryLoadedPlayerRefresh(std::uint64_t generation, int retriesLeft) {
+			if (!SchlongLogic::CanRunSaveTask(generation) || lastPlayerRefresh == generation)
+				return;
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			if (player && player->Is3DLoaded() && player->GetActorBase()) {
+				OnActorLoaded(player);
+				return;
+			}
+			if (retriesLeft > 0) {
+				DelayPlayerRefresh([generation, retriesLeft]() {
+					TryLoadedPlayerRefresh(generation, retriesLeft - 1);
+				});
+			}
+		}
+	}
+
 	void QueueLoadedPlayerRefresh() {
 		const auto generation = SchlongLogic::GetSaveGeneration();
-		SKSE::GetTaskInterface()->AddTask([generation]() {
-			if (SchlongLogic::CanRunSaveTask(generation))
-				OnActorLoaded(RE::PlayerCharacter::GetSingleton());
-		});
+		SKSE::GetTaskInterface()->AddTask([generation]() { TryLoadedPlayerRefresh(generation, 20); });
 	}
 
 	void RegisterEvents() {

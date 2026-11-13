@@ -63,6 +63,9 @@ struct PlayerCharacter : Actor {
     inline static Actor* current = nullptr;
     static Actor* GetSingleton() { return current; }
 };
+struct TESForm {
+    template<class T> static T* LookupByID(FormID) { return PlayerCharacter::current; }
+};
 }
 namespace Util {
 constexpr int kDefaultRank = 10, kDefaultChance = 20;
@@ -167,6 +170,7 @@ int main() {
         SKSE::SerializationInterface save;
         Storage::s_npcData[42] = {"example-addon", 7};
         Storage::SaveCallback(&save);
+        BeginSaveTransition();
         Storage::RevertCallback(nullptr);
         assert(!GetPlayerGenderOverride());
         Storage::LoadCallback(&save);
@@ -224,6 +228,7 @@ int main() {
     RE::PlayerCharacter::current = &nextPlayer;
     RestorePlayerGenderOverride(PlayerGenderOverride{0, 2});
     SOS::QueueLoadedPlayerRefresh(); // Old save task.
+    QueueSaveOverride(14, GetSaveGeneration()); // Old menu task.
     send(Message::kPreLoadGame);
     Storage::RevertCallback(nullptr);
     SOS::OnActorLoaded(&nextPlayer); // Arrives before PGOV is available.
@@ -240,6 +245,10 @@ int main() {
     SKSE::GetTaskInterface()->Run();
     assert(nextPlayer.rank == 1 && nextPlayer.writes == 1 && !GetPlayerGenderOverride());
     assert(loadedAddonQueries == refreshesBeforeLoad + 1);
+    assert(savedOverrides == 0);
+    QueueSaveOverride(14, GetSaveGeneration());
+    SKSE::GetTaskInterface()->Run();
+    assert(savedOverrides == 1);
     ++checks;
 
     nextPlayer.rank = 2; nextPlayer.writes = 0;
@@ -249,13 +258,24 @@ int main() {
     assert(nextPlayer.rank == 2 && nextPlayer.writes == 0);
     ++checks;
 
+    RestorePlayerGenderOverride(PlayerGenderOverride{0, 2});
     send(Message::kPreLoadGame);
+    send(Message::kPostLoadGame); // Failure before Revert leaves the old world intact.
+    assert(nextPlayer.writes == 0 && CanRunSaveTask(GetSaveGeneration()));
+    assert(GetPlayerGenderOverride()->previousRank == 0);
+    Storage::RevertCallback(nullptr); // Standalone script reload.
+    assert(CanRunSaveTask(GetSaveGeneration()) && GetPlayerGenderOverride());
+    ++checks;
+
+    send(Message::kPreLoadGame);
+    Storage::RevertCallback(nullptr);
     newSave.next = 0;
     Storage::LoadCallback(&newSave);
     send(Message::kPostLoadGame); // Failed load never writes faction state.
     SOS::OnActorLoaded(&nextPlayer);
     SKSE::GetTaskInterface()->Run();
     assert(nextPlayer.rank == 2 && nextPlayer.writes == 0 && !GetPlayerGenderOverride());
+    assert(CanRunSaveTask(GetSaveGeneration()));
     ++checks;
 
     send(Message::kPreLoadGame);
@@ -266,8 +286,23 @@ int main() {
     SKSE::GetTaskInterface()->Run();
     assert(nextPlayer.writes == 0);
     nextPlayer.loaded = true;
-    SOS::OnActorLoaded(&nextPlayer);
+    SKSE::GetTaskInterface()->Run(); // Retry succeeds without another actor event.
     assert(nextPlayer.rank == 1 && nextPlayer.writes == 1);
+    ++checks;
+
+    nextPlayer.loaded = false; nextPlayer.writes = 0;
+    send(Message::kPreLoadGame);
+    send(Message::kPostLoadGame, success);
+    const auto delaysBeforeLimit = delayedRefreshes;
+    for (int i = 0; i < 21; ++i) SKSE::GetTaskInterface()->Run();
+    assert(SKSE::GetTaskInterface()->pending.empty() && nextPlayer.writes == 0);
+    assert(delayedRefreshes == delaysBeforeLimit + 20);
+    SOS::QueueLoadedPlayerRefresh();
+    SKSE::GetTaskInterface()->Run();
+    send(Message::kPreLoadGame);
+    nextPlayer.loaded = true;
+    SKSE::GetTaskInterface()->Run();
+    assert(nextPlayer.writes == 0 && SKSE::GetTaskInterface()->pending.empty());
     ++checks;
 
     nextPlayer.rank = 2; nextPlayer.writes = 0;
@@ -345,11 +380,15 @@ tests=tests.replace('    // Concurrent publication',ui_checks+'\n    // Concurre
 
 events = (src / 'Schlongification.cpp').read_text('utf-8')
 actor_loaded = events[events.index('\t\tvoid OnActorLoaded('):events.index('\n\t\t// Underwear')]
-queued_refresh = events[events.index('\tvoid QueueLoadedPlayerRefresh()'):events.index('\n\tvoid RegisterEvents()')]
+queued_refresh = events[events.index('\tvoid TryLoadedPlayerRefresh('):events.index('\n\tvoid RegisterEvents()')]
+save_override = menu[menu.index('\t\tvoid QueueSaveOverride('):menu.index('\n\t\tvoid ChangeAddon(')]
 main = (src / 'main.cpp').read_text('utf-8')
 message_handler = main[main.index('\tvoid OnSKSEMessage('):main.index('\n}\n\nSKSEPluginLoad')]
 load_stubs = r'''
 int loadedAddonQueries = 0;
+int savedOverrides = 0;
+int delayedRefreshes = 0;
+namespace Actors { void SaveOverride(RE::TESNPC*) { ++savedOverrides; } }
 namespace SchlongLogic {
 void UpdateFactions(RE::Actor*, RE::TESObjectARMO*, bool = false);
 RE::TESObjectARMO* DetermineWinningAddon(RE::Actor*) { ++loadedAddonQueries; return nullptr; }
@@ -358,9 +397,15 @@ void ScaleSchlongBones(RE::FormID) {}
 }
 namespace SOS {
 bool NeedsEquip(RE::Actor*, RE::TESObjectARMO*) { return false; }
+namespace {
+std::optional<std::uint64_t> lastPlayerRefresh;
+void DelayPlayerRefresh(std::function<void()> task) {
+    ++delayedRefreshes;
+    SKSE::GetTaskInterface()->AddTask(std::move(task));
+}
 '''
 
-(w/'regression.cpp').write_text(pre+keys+'\n'+settings+'\nSettings g_settings;\n'+settings_io+'\nnamespace SchlongLogic {\n'+decl+logic+'\n}\n'+store_pre+serialization+ui_pre+menu[a:b]+'\n}\n'+load_stubs+actor_loaded+queued_refresh+'\n}\nvoid OnDataLoaded() {}\n'+message_handler+tests,'utf-8')
+(w/'regression.cpp').write_text(pre+keys+'\n'+settings+'\nSettings g_settings;\n'+settings_io+'\nnamespace SchlongLogic {\n'+decl+logic+'\n}\n'+store_pre+serialization+ui_pre+menu[a:b]+'\n}\n'+load_stubs+actor_loaded+queued_refresh+'\n}\n'+save_override+'\nvoid OnDataLoaded() {}\n'+message_handler+tests,'utf-8')
 inc=args.simpleini.resolve()
 command = "@echo off\n" + f'call "{vcvars}" >nul\n' + f'cl /nologo /std:c++latest /EHsc /utf-8 /I"{inc}" regression.cpp /Fe:regression.exe\n' + "if errorlevel 1 exit /b %errorlevel%\nregression.exe\nexit /b %errorlevel%\n"
 (w / "test.cmd").write_text(command, encoding="utf-8")

@@ -128,9 +128,11 @@ namespace Menu {
 		// ===============================================================
 
 		// Remembers the addon and rank of the actor in the overrides JSON, so they survive new games
-		void QueueSaveOverride(RE::FormID a_actorID) {
+		void QueueSaveOverride(RE::FormID a_actorID, std::uint64_t generation) {
 
-			SKSE::GetTaskInterface()->AddTask([a_actorID]() {
+			SKSE::GetTaskInterface()->AddTask([a_actorID, generation]() {
+				if (!SchlongLogic::CanRunSaveTask(generation))
+					return;
 
 				auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
 				Actors::SaveOverride(actor ? actor->GetActorBase() : nullptr);
@@ -139,8 +141,9 @@ namespace Menu {
 
 		void ChangeAddon(RE::FormID a_actorID, const std::string& a_addonName) {
 
+			const auto generation = SchlongLogic::GetSaveGeneration();
 			if (API::SetActorAddonName(a_actorID, a_addonName))
-				QueueSaveOverride(a_actorID);
+				QueueSaveOverride(a_actorID, generation);
 		}
 
 		// Makes an armor revealing or concealing and updates the addon of the actor that wears it
@@ -353,12 +356,13 @@ namespace Menu {
 
 				int rank = data->rank;
 				const Edit edit = SliderIntEdit("Change Rank", &rank, 1, Util::kMaxRank);
+				const auto generation = SchlongLogic::GetSaveGeneration();
 
 				if (edit.changed)
 					API::SetActorRank(actorID, rank);
 
 				if (edit.committed)
-					QueueSaveOverride(actorID);
+					QueueSaveOverride(actorID, generation);
 			}
 
 			// ---- Armor ----

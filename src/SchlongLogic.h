@@ -14,6 +14,7 @@ namespace SchlongLogic {
 	std::optional<PlayerGenderOverride> GetPlayerGenderOverride();
 	void RestorePlayerGenderOverride(std::optional<PlayerGenderOverride> state);
 	void BeginSaveTransition();
+	void RevertSaveTransition();
 	void FinishSaveTransition(bool succeeded);
 	std::uint64_t GetSaveGeneration();
 	bool CanRunSaveTask(std::uint64_t generation);

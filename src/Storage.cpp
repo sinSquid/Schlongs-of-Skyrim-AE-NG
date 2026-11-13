@@ -658,7 +658,7 @@ namespace Storage {
 	}
 
 	void RevertCallback(SKSE::SerializationInterface*) {
-		SchlongLogic::BeginSaveTransition();
+		SchlongLogic::RevertSaveTransition();
 
 		SKSE::log::info("SOS: Reverting storage, clearing the NPC entries");
 
