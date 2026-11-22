@@ -159,7 +159,8 @@ namespace Menu {
 				if (!actor || !armor)
 					return;
 
-				Armors::SetOverride(armor, a_revealing);
+				if (!Armors::SetOverride(armor, a_revealing))
+					return;
 
 				// The armor hides the addon now: its item goes away
 				if (!a_revealing) {
@@ -565,6 +566,11 @@ namespace Menu {
 				g_settings.Save();
 
 			Tooltip("Makes the new race entries of the JSON enabled or disabled by default.");
+
+			if (Gui::Checkbox("Conceal SOS with unmarked body armor by default", &g_settings.concealBodyArmorByDefault))
+				g_settings.Save();
+
+			Tooltip("Applies after restarting Skyrim. When off, unmarked body armor follows the concealing plugins list and original slots. Individual armor settings apply immediately.");
 
 			Gui::SetNextItemWidth(250.0f);
 			const Edit defaultRank = SliderIntEdit("Default rank for addons", &g_settings.rank, -1, Util::kMaxRank);

@@ -35,7 +35,6 @@ namespace {
 
 		// Armors: the menu overrides give their keywords, then the slot 52 changes are made
 		Armors::LoadOverrides();
-		Armors::ApplyOverrides();
 		Armors::ProcessArmors();
 
 		// Actors

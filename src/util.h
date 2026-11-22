@@ -84,6 +84,7 @@ struct Settings {
 	int chance{ Util::kDefaultChance };        // Default "Chance" of the new race entries (0-100)
 	float gaussianDeviation{ 1.0f };           // Spread of the random ranks around the target rank
 	bool whitelistMode{ true };                // true: only female NPCs of the listed mods are eligible, false: all except the listed ones
+	bool concealBodyArmorByDefault{ true };   // Applied when body armor slots are processed at startup
 	SexLabGenderSettings GetSexLabGender() const {
 		const auto modes = sexLabGender_.load(std::memory_order_acquire);
 		return { static_cast<SexLabTreatment>(modes & 3), static_cast<SexLabTreatment>((modes >> 2) & 3) };

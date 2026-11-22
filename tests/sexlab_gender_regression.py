@@ -38,13 +38,30 @@ pre=r'''#define NOMINMAX
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <cassert>
 namespace RE {
 using FormID = std::uint32_t;
 struct TESFaction {};
 struct TESNPC { bool female = true; FormID GetFormID() { return 14; } };
-struct TESObjectARMO { bool pubes = false; };
+struct TESFile {
+    const char* name;
+    const char* GetFilename() const { return name; }
+};
+struct TESObjectARMO {
+    bool pubes = false;
+    bool revealing = false;
+    bool concealing = false;
+    unsigned slots = 0;
+    const TESFile* file = nullptr;
+    const TESFile* GetFile(int) const { return file; }
+};
+struct TESDataHandler {
+    std::vector<TESObjectARMO*> armors;
+    static TESDataHandler* GetSingleton() { static TESDataHandler handler; return &handler; }
+    template<class T> auto& GetFormArray() { return armors; }
+};
 struct Actor {
     TESNPC base;
     bool player = true;
@@ -312,6 +329,8 @@ int main() {
     assert(nextPlayer.rank == 2 && nextPlayer.writes == 0 && !GetPlayerGenderOverride());
     ++checks;
 
+    CheckBodyArmorRules();
+
     // Actual INI methods: conflicting booleans, roundtrip and missing new keys.
     std::ofstream(INIPath) << "[JSON]\nSexLabForceMaleOnSchlong=true\nSexLabForceFutaOnSchlong=true\nSexLabForcePlayerMaleOnSchlong=true\nSexLabForcePlayerFutaOnSchlong=true\n";
     Settings setting; setting.Load();
@@ -378,6 +397,85 @@ ui_checks=r'''
 '''
 tests=tests.replace('    // Concurrent publication',ui_checks+'\n    // Concurrent publication')
 
+armors = (src / 'Armors.cpp').read_text('utf-8')
+slot_rules = armors[armors.index('\t\tbool ApplySlot52Rules('):armors.index('\n\t\t// ===============================================================\n\t\t// OVERRIDES')]
+set_override = armors[armors.index('\tbool SetOverride('):armors.index('\n\tvoid LoadOverrides()')]
+process_armors = armors[armors.index('\tvoid ProcessArmors()'):armors.index('\n\tvoid RemoveConcealing(')]
+armor_stubs = r'''
+using SlotMask = unsigned;
+constexpr SlotMask SLOT_32 = 1u << 2, SLOT_52 = 1u << 22, ExtraSlot = 1u << 8;
+constexpr int RevKW = 1, ConKW = 2;
+constexpr auto BlacklistPath = "test-list";
+namespace Util {
+using ModSet = std::unordered_set<std::string>;
+SlotMask GetArmorSlots(RE::TESObjectARMO* armor) { return armor->slots; }
+void SetArmorSlots(RE::TESObjectARMO* armor, SlotMask slots) { armor->slots = slots; }
+bool ArmorHasKeyword(RE::TESObjectARMO* armor, int keyword, bool) {
+    return keyword == RevKW ? armor->revealing : armor->concealing;
+}
+ModSet LoadModList(const char*, const char*) { return {"Listed.esp"}; }
+bool ModSetContains(const ModSet& mods, const char* name) { return mods.contains(name); }
+}
+'''
+# Scope the existing one-keyword stand-in to the body armor code.
+slot_rules = slot_rules.replace('a_armor, RevKW)', 'a_armor, RevKW, true)').replace('a_armor, ConKW)', 'a_armor, ConKW, true)')
+armor_stubs += r'''
+namespace Armors {
+bool s_processed = false;
+int savedArmorOverrides = 0;
+RE::TESObjectARMO* savedArmor = nullptr;
+std::unordered_map<std::string, bool> s_overrides;
+std::string MakeArmorKey(RE::TESObjectARMO* armor) { return armor == savedArmor ? "saved" : ""; }
+RE::TESObjectARMO* ResolveArmorKey(const std::string& key) { return key == "saved" ? savedArmor : nullptr; }
+void SetKeywords(RE::TESObjectARMO*, bool) {} // Direct overrides must win even if keywords do not change.
+void SaveOverrides() { ++savedArmorOverrides; }
+'''
+armor_checks = r'''
+}
+void CheckBodyArmorRules() {
+    const RE::TESFile listed{"Listed.esp"};
+    RE::TESObjectARMO plain, revealing, concealing, conflict, accessory, listedArmor, saved, original52;
+    auto armors = {&plain, &revealing, &concealing, &conflict, &accessory, &listedArmor, &saved, &original52};
+    RE::TESDataHandler::GetSingleton()->armors.assign(armors);
+    revealing.revealing = conflict.revealing = true;
+    concealing.concealing = conflict.concealing = saved.concealing = true;
+    listedArmor.file = &listed;
+    Armors::savedArmor = &saved;
+    Armors::s_overrides["saved"] = true;
+    const auto covered = [](const auto& armor) { return (armor.slots & SLOT_52) != 0; };
+    for (bool defaultConcealing : {true, false}) {
+        for (auto* armor : armors) armor->slots = SLOT_32 | ExtraSlot;
+        original52.slots |= SLOT_52;
+        accessory.slots = ExtraSlot;
+        Armors::s_processed = false; // Start with fresh armor records as on a restart.
+        g_settings.concealBodyArmorByDefault = defaultConcealing;
+        Armors::ProcessArmors();
+        assert(covered(plain) == defaultConcealing && covered(conflict) == defaultConcealing);
+        assert(covered(concealing) && covered(listedArmor) && covered(original52));
+        assert(!covered(revealing) && !covered(saved) && accessory.slots == ExtraSlot);
+        for (auto* armor : armors) assert((armor->slots & ~SLOT_52) == (armor == &accessory ? ExtraSlot : SLOT_32 | ExtraSlot));
+        g_settings.concealBodyArmorByDefault = !defaultConcealing;
+        Armors::ProcessArmors();
+        assert(covered(plain) == defaultConcealing); // No reprocessing until restart.
+        assert(Armors::SetOverride(&saved, false) && covered(saved));
+        assert(Armors::SetOverride(&saved, true) && !covered(saved));
+        assert(!Armors::SetOverride(&plain, true));
+    }
+    assert(Armors::savedArmorOverrides == 4 && Armors::s_overrides.at("saved"));
+    Settings savedSettings;
+    assert(savedSettings.concealBodyArmorByDefault);
+    savedSettings.concealBodyArmorByDefault = false;
+    savedSettings.Save();
+    Settings loadedSettings;
+    loadedSettings.Load();
+    assert(!loadedSettings.concealBodyArmorByDefault);
+    std::ofstream(INIPath) << "[JSON]\nEnabled=true\n";
+    loadedSettings.Load();
+    assert(loadedSettings.concealBodyArmorByDefault);
+    std::puts("Body armor startup policy, per-item precedence, live overrides and INI roundtrip passed");
+}
+'''
+
 events = (src / 'Schlongification.cpp').read_text('utf-8')
 actor_loaded = events[events.index('\t\tvoid OnActorLoaded('):events.index('\n\t\t// Underwear')]
 queued_refresh = events[events.index('\tvoid TryLoadedPlayerRefresh('):events.index('\n\tvoid RegisterEvents()')]
@@ -405,7 +503,7 @@ void DelayPlayerRefresh(std::function<void()> task) {
 }
 '''
 
-(w/'regression.cpp').write_text(pre+keys+'\n'+settings+'\nSettings g_settings;\n'+settings_io+'\nnamespace SchlongLogic {\n'+decl+logic+'\n}\n'+store_pre+serialization+ui_pre+menu[a:b]+'\n}\n'+load_stubs+actor_loaded+queued_refresh+'\n}\n'+save_override+'\nvoid OnDataLoaded() {}\n'+message_handler+tests,'utf-8')
+(w/'regression.cpp').write_text(pre+keys+'\n'+settings+'\nSettings g_settings;\n'+settings_io+'\nnamespace SchlongLogic {\n'+decl+logic+'\n}\n'+store_pre+serialization+ui_pre+menu[a:b]+'\n}\n'+load_stubs+actor_loaded+queued_refresh+'\n}\n'+save_override+'\nvoid OnDataLoaded() {}\n'+message_handler+armor_stubs+slot_rules+set_override+process_armors+armor_checks+tests,'utf-8')
 inc=args.simpleini.resolve()
 command = "@echo off\n" + f'call "{vcvars}" >nul\n' + f'cl /nologo /std:c++latest /EHsc /utf-8 /I"{inc}" regression.cpp /Fe:regression.exe\n' + "if errorlevel 1 exit /b %errorlevel%\nregression.exe\nexit /b %errorlevel%\n"
 (w / "test.cmd").write_text(command, encoding="utf-8")

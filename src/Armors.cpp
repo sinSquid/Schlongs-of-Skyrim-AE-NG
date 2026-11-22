@@ -19,10 +19,9 @@ namespace Armors {
 		// SLOT 52
 		// ===============================================================
 
-		// Adds or removes slot 52 from a body armor according to its keywords. Armors with neither (or both)
-		// keywords are concealing if their plugin is in the list, otherwise they are left as they are.
-		// Returns true if the armor was changed.
-		bool ApplySlot52Rules(RE::TESObjectARMO* a_armor, const Util::ModSet* a_concealingMods = nullptr) {
+		// Explicit per-item settings take precedence over keywords and the startup default.
+		bool ApplySlot52Rules(RE::TESObjectARMO* a_armor, bool a_defaultConcealing,
+			const Util::ModSet& a_concealingMods, std::optional<bool> a_revealingOverride = std::nullopt) {
 
 			if (!a_armor)
 				return false;
@@ -39,11 +38,15 @@ namespace Armors {
 
 			bool shouldHaveSlot52 = hasSlot52;
 
-			if (revealing != concealing)
+			if (a_revealingOverride)
+				shouldHaveSlot52 = !*a_revealingOverride;
+			else if (revealing != concealing)
 				shouldHaveSlot52 = concealing;
-			else if (a_concealingMods) {
+			else if (a_defaultConcealing)
+				shouldHaveSlot52 = true;
+			else if (!a_concealingMods.empty()) {
 				const auto* file = a_armor->GetFile(0);
-				if (file && Util::ModSetContains(*a_concealingMods, file->GetFilename()))
+				if (file && Util::ModSetContains(a_concealingMods, file->GetFilename()))
 					shouldHaveSlot52 = true;
 			}
 
@@ -111,17 +114,18 @@ namespace Armors {
 		}
 	}
 
-	void SetOverride(RE::TESObjectARMO* a_armor, bool a_revealing) {
+	bool SetOverride(RE::TESObjectARMO* a_armor, bool a_revealing) {
 
 		const auto key = MakeArmorKey(a_armor);
 		if (key.empty())
-			return;
+			return false;
 
 		s_overrides[key] = a_revealing;
 		SetKeywords(a_armor, a_revealing);
 		SaveOverrides();
 
-		ApplySlot52Rules(a_armor);
+		ApplySlot52Rules(a_armor, false, {}, a_revealing);
+		return true;
 	}
 
 	void LoadOverrides() {
@@ -140,14 +144,6 @@ namespace Armors {
 		SKSE::log::info("SOS: Loaded {} armor overrides from the JSON.", s_overrides.size());
 	}
 
-	void ApplyOverrides() {
-
-		for (const auto& [key, revealing] : s_overrides) {
-			if (auto* armor = ResolveArmorKey(key))
-				SetKeywords(armor, revealing);
-		}
-	}
-
 	void ClearOverrides() {
 
 		s_overrides.clear();
@@ -162,11 +158,21 @@ namespace Armors {
 		if (!dataHandler)
 			return;
 
-		const auto concealingMods = Util::LoadModList(BlacklistPath, "Armor Blacklist");
+		const bool defaultConcealing = g_settings.concealBodyArmorByDefault;
+		const auto concealingMods = defaultConcealing ? Util::ModSet{} : Util::LoadModList(BlacklistPath, "Armor Blacklist");
+		std::unordered_map<RE::TESObjectARMO*, bool> overrides;
+		for (const auto& [key, revealing] : s_overrides) {
+			if (auto* armor = ResolveArmorKey(key)) {
+				SetKeywords(armor, revealing);
+				overrides.emplace(armor, revealing);
+			}
+		}
 
 		std::uint32_t count = 0;
 		for (auto* armor : dataHandler->GetFormArray<RE::TESObjectARMO>()) {
-			if (ApplySlot52Rules(armor, &concealingMods))
+			const auto override = overrides.find(armor);
+			const auto revealing = override == overrides.end() ? std::nullopt : std::optional{ override->second };
+			if (ApplySlot52Rules(armor, defaultConcealing, concealingMods, revealing))
 				++count;
 		}
 

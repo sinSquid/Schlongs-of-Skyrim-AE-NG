@@ -84,6 +84,7 @@ void Settings::Load() {
 	chance = static_cast<int>(ini.GetLongValue(kIniSection, "Chance", chance));
 	gaussianDeviation = static_cast<float>(ini.GetDoubleValue(kIniSection, "GaussianDeviation", static_cast<double>(gaussianDeviation)));
 	whitelistMode = ini.GetBoolValue(kIniSection, "SOS_SchlongEligibleActorMods is a Whitelist", whitelistMode);
+	concealBodyArmorByDefault = ini.GetBoolValue(kIniSection, "ConcealBodyArmorByDefault", true);
 	const auto previousModes = GetSexLabGender();
 	const bool male = ini.GetBoolValue(kIniSection, "SexLabForceMaleOnSchlong", previousModes.global == SexLabTreatment::Male);
 	const bool futa = ini.GetBoolValue(kIniSection, "SexLabForceFutaOnSchlong", previousModes.global == SexLabTreatment::Futa);
@@ -113,6 +114,7 @@ void Settings::Save() const {
 	ini.SetLongValue(kIniSection, "Chance", chance);
 	ini.SetDoubleValue(kIniSection, "GaussianDeviation", static_cast<double>(gaussianDeviation));
 	ini.SetBoolValue(kIniSection, "SOS_SchlongEligibleActorMods is a Whitelist", whitelistMode);
+	ini.SetBoolValue(kIniSection, "ConcealBodyArmorByDefault", concealBodyArmorByDefault);
 	const auto genderModes = GetSexLabGender();
 	ini.SetBoolValue(kIniSection, "SexLabForceMaleOnSchlong", genderModes.global == SexLabTreatment::Male);
 	ini.SetBoolValue(kIniSection, "SexLabForceFutaOnSchlong", genderModes.global == SexLabTreatment::Futa);
